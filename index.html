@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#1a1a2e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.json">
+<title>OTP Pass</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Setup page */
+.setup {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  padding: 24px;
+  max-width: 360px;
+  width: 100%;
+}
+.setup h2 { font-size: 24px; color: #4fc3f7; }
+.setup label { font-size: 14px; color: #aaa; align-self: flex-start; }
+.setup input {
+  width: 100%;
+  padding: 14px;
+  border: 2px solid #2a2a4a;
+  border-radius: 12px;
+  background: #2a2a4a;
+  color: #e0e0e0;
+  font-size: 16px;
+  outline: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.setup input:focus { border-color: #4fc3f7; }
+.setup .save-btn {
+  width: 100%;
+  padding: 14px;
+  border: none;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #4fc3f7, #0288d1);
+  color: #fff;
+  font-size: 18px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 8px;
+}
+.setup .save-btn:active { transform: scale(0.97); }
+.setup .error { color: #f44336; font-size: 13px; display: none; }
+
+/* Main app */
+.container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 32px;
+}
+.timer-ring { position: relative; width: 160px; height: 160px; }
+.timer-ring svg { transform: rotate(-90deg); width: 160px; height: 160px; }
+.timer-ring .bg { fill: none; stroke: #2a2a4a; stroke-width: 8; }
+.timer-ring .progress {
+  fill: none; stroke: #4fc3f7; stroke-width: 8; stroke-linecap: round;
+  transition: stroke-dashoffset 0.3s linear, stroke 0.3s;
+}
+.timer-ring .progress.warn { stroke: #ff9800; }
+.timer-ring .progress.danger { stroke: #f44336; }
+.timer-text {
+  position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 48px; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.copy-btn {
+  width: 220px; height: 60px; border: none; border-radius: 16px;
+  background: linear-gradient(135deg, #4fc3f7, #0288d1);
+  color: #fff; font-size: 20px; font-weight: 600; cursor: pointer;
+  transition: all 0.2s; -webkit-tap-highlight-color: transparent;
+}
+.copy-btn:active { transform: scale(0.95); }
+.copy-btn.success { background: linear-gradient(135deg, #66bb6a, #388e3c); }
+.otp-display {
+  font-size: 18px; color: #888; cursor: pointer;
+  padding: 8px 16px; border-radius: 8px; background: #2a2a4a;
+  font-variant-numeric: tabular-nums; letter-spacing: 4px; transition: color 0.2s;
+}
+.otp-display:active { color: #4fc3f7; }
+.settings-link {
+  margin-top: 16px; font-size: 13px; color: #555; cursor: pointer;
+  text-decoration: underline;
+}
+.settings-link:active { color: #4fc3f7; }
+.toast {
+  position: fixed; bottom: 60px; background: #333; color: #fff;
+  padding: 12px 24px; border-radius: 12px; font-size: 14px;
+  opacity: 0; transition: opacity 0.3s; pointer-events: none;
+}
+.toast.show { opacity: 1; }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<!-- Setup Page -->
+<div class="setup" id="setupPage">
+  <h2>OTP Pass Setup</h2>
+  <label for="inputPassword">Static Password</label>
+  <input type="password" id="inputPassword" placeholder="Enter static password">
+  <label for="inputSecret">OTP Secret (Base32)</label>
+  <input type="text" id="inputSecret" placeholder="Enter OTP secret">
+  <div class="error" id="setupError">Please fill in both fields</div>
+  <button class="save-btn" id="saveBtn">Save & Start</button>
+</div>
+
+<!-- Main App -->
+<div class="container hidden" id="mainApp">
+  <div class="timer-ring">
+    <svg viewBox="0 0 160 160">
+      <circle class="bg" cx="80" cy="80" r="70"/>
+      <circle class="progress" cx="80" cy="80" r="70"
+        stroke-dasharray="439.82" stroke-dashoffset="0"/>
+    </svg>
+    <div class="timer-text" id="countdown">30</div>
+  </div>
+  <button class="copy-btn" id="copyBtn">Copy Password</button>
+  <div class="otp-display" id="otpDisplay">******</div>
+  <div class="settings-link" id="settingsLink">Settings</div>
+</div>
+
+<div class="toast" id="toast">Copied!</div>
+
+<script>
+const PERIOD = 30;
+const DIGITS = 6;
+const CIRCUMFERENCE = 2 * Math.PI * 70;
+
+// Base32 decode
+function base32Decode(input) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const cleaned = input.toUpperCase().replace(/[^A-Z2-7]/g, '');
+  let bits = '';
+  for (const ch of cleaned) {
+    const val = alphabet.indexOf(ch);
+    if (val >= 0) bits += val.toString(2).padStart(5, '0');
+  }
+  const bytes = new Uint8Array(Math.floor(bits.length / 8));
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(bits.substring(i * 8, i * 8 + 8), 2);
+  }
+  return bytes;
+}
+
+// Pure JS SHA-1
+function sha1(msg) {
+  function rotl(n, s) { return (n << s) | (n >>> (32 - s)); }
+  let h0 = 0x67452301, h1 = 0xEFCDAB89, h2 = 0x98BADCFE, h3 = 0x10325476, h4 = 0xC3D2E1F0;
+  const len = msg.length;
+  const bitLen = len * 8;
+  msg.push(0x80);
+  while (msg.length % 64 !== 56) msg.push(0);
+  msg.push(0, 0, 0, 0);
+  msg.push((bitLen >>> 24) & 0xff, (bitLen >>> 16) & 0xff, (bitLen >>> 8) & 0xff, bitLen & 0xff);
+  for (let offset = 0; offset < msg.length; offset += 64) {
+    const w = new Array(80);
+    for (let i = 0; i < 16; i++)
+      w[i] = (msg[offset+i*4]<<24)|(msg[offset+i*4+1]<<16)|(msg[offset+i*4+2]<<8)|msg[offset+i*4+3];
+    for (let i = 16; i < 80; i++)
+      w[i] = rotl(w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16], 1);
+    let a=h0, b=h1, c=h2, d=h3, e=h4;
+    for (let i = 0; i < 80; i++) {
+      let f, k;
+      if (i<20)      { f=(b&c)|(~b&d); k=0x5A827999; }
+      else if (i<40) { f=b^c^d;         k=0x6ED9EBA1; }
+      else if (i<60) { f=(b&c)|(b&d)|(c&d); k=0x8F1BBCDC; }
+      else           { f=b^c^d;         k=0xCA62C1D6; }
+      const t = (rotl(a,5)+f+e+k+w[i]) & 0xffffffff;
+      e=d; d=c; c=rotl(b,30); b=a; a=t;
+    }
+    h0=(h0+a)&0xffffffff; h1=(h1+b)&0xffffffff;
+    h2=(h2+c)&0xffffffff; h3=(h3+d)&0xffffffff;
+    h4=(h4+e)&0xffffffff;
+  }
+  const result = [];
+  for (const h of [h0,h1,h2,h3,h4])
+    result.push((h>>>24)&0xff,(h>>>16)&0xff,(h>>>8)&0xff,h&0xff);
+  return result;
+}
+
+// HMAC-SHA1
+function hmacSHA1(key, message) {
+  const blockSize = 64;
+  let k = Array.from(key);
+  if (k.length > blockSize) k = sha1(k.slice());
+  while (k.length < blockSize) k.push(0);
+  const opad = k.map(b => b ^ 0x5c);
+  const ipad = k.map(b => b ^ 0x36);
+  const inner = sha1(ipad.concat(Array.from(message)));
+  return sha1(opad.concat(inner));
+}
+
+// TOTP
+function generateTOTP(secret) {
+  const keyBytes = base32Decode(secret);
+  const epoch = Math.floor(Date.now() / 1000 / PERIOD);
+  const timeBytes = new Uint8Array(8);
+  let tmp = epoch;
+  for (let i = 7; i >= 0; i--) { timeBytes[i] = tmp & 0xff; tmp = Math.floor(tmp / 256); }
+  const hash = hmacSHA1(keyBytes, timeBytes);
+  const offset = hash[hash.length - 1] & 0x0f;
+  const binary =
+    ((hash[offset]&0x7f)<<24)|((hash[offset+1]&0xff)<<16)|
+    ((hash[offset+2]&0xff)<<8)|(hash[offset+3]&0xff);
+  return String(binary % 10 ** DIGITS).padStart(DIGITS, '0');
+}
+
+// DOM
+const setupPage = document.getElementById('setupPage');
+const mainApp = document.getElementById('mainApp');
+const inputPassword = document.getElementById('inputPassword');
+const inputSecret = document.getElementById('inputSecret');
+const setupError = document.getElementById('setupError');
+const saveBtn = document.getElementById('saveBtn');
+const countdownEl = document.getElementById('countdown');
+const progressEl = document.querySelector('.progress');
+const copyBtn = document.getElementById('copyBtn');
+const otpDisplayEl = document.getElementById('otpDisplay');
+const toastEl = document.getElementById('toast');
+const settingsLink = document.getElementById('settingsLink');
+
+let staticPassword = '';
+let otpSecret = '';
+let currentOTP = '';
+let otpVisible = false;
+let tickInterval = null;
+
+// Load saved config
+function loadConfig() {
+  staticPassword = localStorage.getItem('otp_static_pw') || '';
+  otpSecret = localStorage.getItem('otp_secret') || '';
+  return staticPassword && otpSecret;
+}
+
+// Show setup or main app
+function showSetup() {
+  if (tickInterval) clearInterval(tickInterval);
+  setupPage.classList.remove('hidden');
+  mainApp.classList.add('hidden');
+  inputPassword.value = staticPassword;
+  inputSecret.value = otpSecret;
+}
+
+function showMain() {
+  setupPage.classList.add('hidden');
+  mainApp.classList.remove('hidden');
+  lastEpoch = -1;
+  tick();
+  tickInterval = setInterval(tick, 500);
+}
+
+// Save config
+saveBtn.addEventListener('click', () => {
+  const pw = inputPassword.value.trim();
+  const secret = inputSecret.value.trim();
+  if (!pw || !secret) {
+    setupError.style.display = 'block';
+    return;
+  }
+  setupError.style.display = 'none';
+  localStorage.setItem('otp_static_pw', pw);
+  localStorage.setItem('otp_secret', secret);
+  staticPassword = pw;
+  otpSecret = secret;
+  showMain();
+});
+
+// Settings link
+settingsLink.addEventListener('click', showSetup);
+
+// Timer & OTP
+function getRemaining() {
+  return PERIOD - (Math.floor(Date.now() / 1000) % PERIOD);
+}
+
+function refreshOTP() {
+  currentOTP = generateTOTP(otpSecret);
+  otpDisplayEl.textContent = otpVisible ? currentOTP : '******';
+}
+
+function updateUI() {
+  const remaining = getRemaining();
+  countdownEl.textContent = remaining;
+  const fraction = remaining / PERIOD;
+  progressEl.style.strokeDashoffset = CIRCUMFERENCE * (1 - fraction);
+  progressEl.classList.remove('warn', 'danger');
+  if (remaining <= 5) progressEl.classList.add('danger');
+  else if (remaining <= 10) progressEl.classList.add('warn');
+}
+
+let lastEpoch = -1;
+function tick() {
+  const epoch = Math.floor(Date.now() / 1000 / PERIOD);
+  if (epoch !== lastEpoch) { lastEpoch = epoch; refreshOTP(); }
+  updateUI();
+}
+
+// Copy
+let toastTimer;
+copyBtn.addEventListener('click', () => {
+  if (!currentOTP) refreshOTP();
+  const full = staticPassword + currentOTP;
+  try {
+    navigator.clipboard.writeText(full);
+    copyBtn.textContent = '\u2713 Copied!';
+    copyBtn.classList.add('success');
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      copyBtn.textContent = 'Copy Password';
+      copyBtn.classList.remove('success');
+      toastEl.classList.remove('show');
+    }, 1500);
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = full;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    copyBtn.textContent = '\u2713 Copied!';
+    copyBtn.classList.add('success');
+    setTimeout(() => {
+      copyBtn.textContent = 'Copy Password';
+      copyBtn.classList.remove('success');
+    }, 1500);
+  }
+});
+
+// Toggle OTP visibility
+otpDisplayEl.addEventListener('click', () => {
+  otpVisible = !otpVisible;
+  otpDisplayEl.textContent = otpVisible ? currentOTP : '******';
+});
+
+// Init
+if (loadConfig()) { showMain(); } else { showSetup(); }
+
+// Register service worker
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>
